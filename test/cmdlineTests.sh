@@ -442,6 +442,7 @@ SOLTMPDIR=$(mktemp -d)
     #echo *.sol | xargs -P 4 -n 50 "${SOLIDITY_BUILD_DIR}/test/tools/solfuzzer" --quiet --input-files
     #echo *.sol | xargs -P 4 -n 50 "${SOLIDITY_BUILD_DIR}/test/tools/solfuzzer" --without-optimizer --quiet --input-files
 )
-rm -rf "$SOLTMPDIR"
+#rm -rf "$SOLTMPDIR"
+echo $SOLTMPDIR
 
 echo "Commandline tests successful."
