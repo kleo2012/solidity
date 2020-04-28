@@ -136,7 +136,19 @@ public:
 
 	std::string newYulVariable();
 
+	static Arity functionArity(FunctionDefinition const& _function);
+	static Arity functionArity(FunctionType const& _functionType);
+	static std::string internalDispatchFunctionName(Arity const& _arity);
+
+	/// Generates a Yul function that can simulate a call to any of the contract's internal functions
+	/// of specified arity via a pointer.
 	std::string internalDispatch(Arity const& _arity);
+
+	/// Generates a Yul function that can simulate a call to one of the specified functions via a pointer.
+	/// All the functions must have the same number of input and output arguments. If they differ,
+	/// it's necessary to make multiple calls to generate all the internal dispatch functions
+	/// (one for each arity).
+	std::string internalDispatch(Arity const& _arity, std::set<FunctionDefinition const*> const& _functions);
 
 	/// @returns a new copy of the utility function generator (but using the same function set).
 	YulUtilFunctions utils();
