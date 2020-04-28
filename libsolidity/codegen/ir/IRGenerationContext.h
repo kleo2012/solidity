@@ -71,6 +71,8 @@ struct std::less<solidity::frontend::Arity>
 namespace solidity::frontend
 {
 
+using InternalDispatchMap = std::map<Arity, std::set<FunctionDefinition const*>>;
+
 /**
  * Class that contains contextual information during IR generation.
  */
@@ -136,13 +138,68 @@ public:
 
 	std::string newYulVariable();
 
+	/// Initializes the collection of dispatch candidates with specified functions.
+	void setInternalDispatchCandidates(InternalDispatchMap _internalDispatchMap);
+
+	/// Returns two collections: functions that need to be callable via internal dispatch and
+	/// candidates that were rejected because they're never actually called via pointers.
+	/// This is the last step in gathering content for internal dispatch generation and the function
+	/// also clears the collections stored in the context so that the process can be started again
+	/// from scratch.
+	///
+	/// Preserving the candidates is necessary when generating multiple, distinct assemblies that
+	/// can share function pointers. For example when a constructor puts a pointer to an
+	/// internal function in a storage variable and an external function uses that variable to call
+	/// that internal function. Such a function will not be recognized as a candidate for internal
+	/// dispatch when visiting the runtime code. You need to have the candidates detected in the
+	/// deployment code to be able to generate valid internal dispatch in this situation.
+	///
+	/// Can only be called immediately after @a moveCollectedReferencesToDispatch().
+	std::tuple<InternalDispatchMap, InternalDispatchMap> consumeInternalDispatchMap();
+
+	/// Prepares internal dispatch content to be consumed. This involves moving functions from
+	/// @a m_dispatchableInternalFunctionReferences to the candidate pool and then promoting candidates
+	/// to the dispatch if a pointer through which they might be called was found.
+	///
+	/// This function should be called after all the code has been visited by the generator. Note
+	/// that the promoted candidates are added to the code generation queue which may introduce
+	/// more code to be visited. For this reason you need to call it multiple times alternating
+	/// with code generation until the queue is empty. Only then it's safe to call @a consumeInternalDispatchMap().
+	void moveCollectedReferencesToDispatch();
+
+	/// Returns true if the context has not collected any functions or candidates for inclusion
+	/// in the internal dispatch.
+	bool internalDispatchClean() const {
+		return
+			m_internalDispatch.empty() &&
+			m_internalDispatchCandidates.empty() &&
+			m_dispatchableInternalFunctionReferences.empty();
+	}
+
+	/// Registers an expression that references an internal function by name as a tentative candidate
+	/// for inclusion in internal dispatch. The function will become an actual candidate
+	/// if it's not removed using @a forgetDispatchableReference() before the next call to
+	/// @a moveCollectedReferencesToDispatch().
+	///
+	/// Must not be called more than once with the same expression.
+	std::string collectDispatchableReference(Expression const& _expression, FunctionDefinition const& _function);
+
+	/// Removes an expression that references an internal function by name from the collection of
+	/// tentative candidates for inclusion in internal dispatch. The functions should be called
+	/// if it turns out that the expression represents a direct function call and does not really need to
+	/// to through the dispatch.
+	///
+	/// Must not be called if the expression has not been previously added using @a forgetDispatchableReference().
+	void forgetDispatchableReference(Expression const& _expression);
+
+	/// Registers the fact that an internal function call through a pointer of specified arity has
+	/// been detected. This means that all candidates of that arity will now be included in the dispatch.
+	/// Note: the candidates are not actually moved until you call @a moveCollectedReferencesToDispatch().
+	std::string registerInternalDispatch(Arity const& _arity);
+
 	static Arity functionArity(FunctionDefinition const& _function);
 	static Arity functionArity(FunctionType const& _functionType);
 	static std::string internalDispatchFunctionName(Arity const& _arity);
-
-	/// Generates a Yul function that can simulate a call to any of the contract's internal functions
-	/// of specified arity via a pointer.
-	std::string internalDispatch(Arity const& _arity);
 
 	/// Generates a Yul function that can simulate a call to one of the specified functions via a pointer.
 	/// All the functions must have the same number of input and output arguments. If they differ,
@@ -194,6 +251,29 @@ private:
 	/// long as the order of Yul functions in the generated code is deterministic and the same on
 	/// all platforms - which is a property guaranteed by MultiUseYulFunctionCollector.
 	std::set<FunctionDefinition const*> m_functionGenerationQueue;
+
+	/// Collection of functions that need to be callable via internal dispatch.
+	/// These are internal functions which satisfy all of the following conditions:
+	/// 1. Are referenced by name in an expression other than a direct function call.
+	/// 2. There exists at least one call of any internal function of the same arity via a pointer.
+	/// Note that having a key with an empty set of functions is a valid situation. It means that
+	/// the code contains a call via a pointer even though a specific function is never assigned to it.
+	/// It will fail at runtime but the code must still compile.
+	InternalDispatchMap m_internalDispatch;
+
+	/// Collection of functions that are referenced by name in expressions other than direct
+	/// function calls but are never actually called via pointers. We do not need a dispatch for
+	/// them yet but we keep track of them in case such a call is detected later.
+	/// May contain keys matching arities present in @a m_internalDispatch but only temporarily
+	/// (until the next call to @a moveCollectedReferencesToDispatch()).
+	InternalDispatchMap m_internalDispatchCandidates;
+
+	/// A helper collection for detecting functions referenced by name in expressions other than
+	/// direct function calls. It receives all expressions where a function is mentioned by
+	/// name and if they're later determined to be direct function calls, they're removed.
+	/// Once all the reachable code has been visited, @a moveCollectedReferencesToDispatch() must
+	/// be called to move the content to @a m_internalDispatch and @a m_internalDispatchCandidates.
+	std::map<Expression const*, FunctionDefinition const*> m_dispatchableInternalFunctionReferences;
 
 	std::set<ContractDefinition const*, ASTNode::CompareByID> m_subObjects;
 };

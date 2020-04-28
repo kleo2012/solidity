@@ -29,6 +29,8 @@
 #include <libsolutil/Whiskers.h>
 #include <libsolutil/StringUtils.h>
 
+#include <boost/range/adaptor/map.hpp>
+
 using namespace std;
 using namespace solidity;
 using namespace solidity::util;
@@ -153,6 +155,94 @@ string IRGenerationContext::trySuccessConditionVariable(Expression const& _expre
 	return "trySuccessCondition_" + to_string(_expression.id());
 }
 
+void IRGenerationContext::setInternalDispatchCandidates(InternalDispatchMap _internalDispatchCandidates)
+{
+	solAssert(internalDispatchClean(), "");
+
+	m_internalDispatchCandidates = move(_internalDispatchCandidates);
+}
+
+tuple<InternalDispatchMap, InternalDispatchMap> IRGenerationContext::consumeInternalDispatchMap()
+{
+	solAssert(
+		m_dispatchableInternalFunctionReferences.empty(),
+		"You must call moveCollectedReferencesToDispatch() before constructing internal dispatch map."
+	);
+
+	InternalDispatchMap internalDispatch = move(m_internalDispatch);
+	InternalDispatchMap internalDispatchCandidates = move(m_internalDispatchCandidates);
+
+	m_internalDispatch.clear();
+	m_internalDispatchCandidates.clear();
+
+	return {move(internalDispatch), move(internalDispatchCandidates)};
+}
+
+void IRGenerationContext::moveCollectedReferencesToDispatch()
+{
+	// First, find (empty) arities newly registered in m_internalDispatch and fill them with
+	// candidates collected so far.
+	for (auto dispatchIt = m_internalDispatch.begin(); dispatchIt != m_internalDispatch.end(); ++dispatchIt)
+	{
+		auto candidateIt = m_internalDispatchCandidates.find(dispatchIt->first);
+
+		solAssert(dispatchIt->second.empty() || candidateIt == m_internalDispatchCandidates.end(), "");
+
+		if (candidateIt != m_internalDispatchCandidates.end())
+		{
+			for (FunctionDefinition const* function: candidateIt->second)
+				enqueueFunctionForCodeGeneration(*function);
+
+			dispatchIt->second = move(candidateIt->second);
+			m_internalDispatchCandidates.erase(candidateIt);
+		}
+	}
+
+	// Now process the references, adding them either as candidates or as dispatch members,
+	// depending on whether the arity has been registered or not.
+	for (auto function: m_dispatchableInternalFunctionReferences | boost::adaptors::map_values)
+	{
+		solAssert(function, "");
+		Arity arity = functionArity(*function);
+
+		auto dispatchIt = m_internalDispatch.find(arity);
+		auto candidateIt = m_internalDispatchCandidates.find(arity);
+		solAssert((dispatchIt == m_internalDispatch.end()) || (candidateIt == m_internalDispatchCandidates.end()), "");
+
+		if (dispatchIt != m_internalDispatch.end())
+		{
+			dispatchIt->second.insert(function);
+			enqueueFunctionForCodeGeneration(*function);
+		}
+		else if (candidateIt != m_internalDispatchCandidates.end())
+			candidateIt->second.insert(function);
+		else
+			m_internalDispatchCandidates[arity] = {function};
+	}
+	m_dispatchableInternalFunctionReferences.clear();
+}
+
+string IRGenerationContext::collectDispatchableReference(Expression const& _expression, FunctionDefinition const& _function)
+{
+	solAssert(m_dispatchableInternalFunctionReferences.count(&_expression) == 0, "");
+
+	m_dispatchableInternalFunctionReferences[&_expression] = &_function;
+	return internalDispatchFunctionName(functionArity(_function));
+}
+
+void IRGenerationContext::forgetDispatchableReference(Expression const& _expression)
+{
+	solAssert(m_dispatchableInternalFunctionReferences.count(&_expression) > 0, "");
+
+	m_dispatchableInternalFunctionReferences.erase(&_expression);
+}
+
+string IRGenerationContext::registerInternalDispatch(Arity const& _arity)
+{
+	m_internalDispatch.try_emplace(_arity);
+	return internalDispatchFunctionName(_arity);
+}
+
 Arity IRGenerationContext::functionArity(FunctionDefinition const& _function)
 {
 	FunctionType const* functionType = TypeProvider::function(_function)->asCallableFunction(false);
@@ -173,29 +263,6 @@ string IRGenerationContext::internalDispatchFunctionName(Arity const& _arity)
 	return "dispatch_internal"
 		"_in_" + to_string(_arity.in) +
 		"_out_" + to_string(_arity.out);
-}
-
-string IRGenerationContext::internalDispatch(Arity const& _arity)
-{
-	// UNIMPLEMENTED: Internal library calls via pointers are not implemented yet.
-	// We're not generating code for internal library functions here even though it's possible
-	// to call them via pointers. Right now such calls end up triggering the `default` case in
-	// the switch above.
-	set<FunctionDefinition const*> functions;
-	for (auto const& contract: mostDerivedContract().annotation().linearizedBaseContracts)
-		for (FunctionDefinition const* function: contract->definedFunctions())
-			if (
-				FunctionType const* functionType = TypeProvider::function(*function)->asCallableFunction(false);
-				!function->isConstructor() &&
-				TupleType(functionType->parameterTypes()).sizeOnStack() == _arity.in &&
-				TupleType(functionType->returnParameterTypes()).sizeOnStack() == _arity.out
-			)
-			{
-				functions.insert(function);
-				enqueueFunctionForCodeGeneration(*function);
-			}
-
-	return internalDispatch(functions);
 }
 
 string IRGenerationContext::internalDispatch(Arity const& _arity, set<FunctionDefinition const*> const& _functions)

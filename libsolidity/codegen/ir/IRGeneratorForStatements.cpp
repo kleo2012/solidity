@@ -644,7 +644,10 @@ void IRGeneratorForStatements::endVisit(FunctionCall const& _functionCall)
 
 			functionDef = dynamic_cast<FunctionDefinition const*>(memberAccess->annotation().referencedDeclaration);
 			if (functionDef.value() != nullptr)
+			{
 				solAssert(functionType->declaration() == *memberAccess->annotation().referencedDeclaration, "");
+				m_context.forgetDispatchableReference(*memberAccess);
+			}
 			else
 			{
 				solAssert(dynamic_cast<VariableDeclaration const*>(memberAccess->annotation().referencedDeclaration), "");
@@ -659,6 +662,9 @@ void IRGeneratorForStatements::endVisit(FunctionCall const& _functionCall)
 			{
 				functionDef = &unresolvedFunctionDef->resolveVirtual(m_context.mostDerivedContract());
 				solAssert(functionType->declaration() == *identifier->annotation().referencedDeclaration, "");
+
+				// It's not a call via pointer so we don't have to include the function in internal dispatch.
+				m_context.forgetDispatchableReference(*identifier);
 			}
 			else
 			{
@@ -689,11 +695,7 @@ void IRGeneratorForStatements::endVisit(FunctionCall const& _functionCall)
 				")\n";
 		else
 			define(_functionCall) <<
-				// NOTE: internalDispatch() takes care of adding the function to function generation queue
-				m_context.internalDispatch(Arity{
-					TupleType(functionType->parameterTypes()).sizeOnStack(),
-					TupleType(functionType->returnParameterTypes()).sizeOnStack()
-				}) <<
+				m_context.registerInternalDispatch(m_context.functionArity(*functionType)) <<
 				"(" <<
 				IRVariable(_functionCall.expression()).part("functionIdentifier").name() <<
 				joinHumanReadablePrefixed(args) <<
@@ -1398,7 +1400,10 @@ void IRGeneratorForStatements::endVisit(MemberAccess const& _memberAccess)
 					break;
 				case FunctionType::Kind::Internal:
 					if (auto const* function = dynamic_cast<FunctionDefinition const*>(_memberAccess.annotation().referencedDeclaration))
+					{
 						define(_memberAccess) << to_string(function->id()) << "\n";
+						m_context.collectDispatchableReference(_memberAccess, *function);
+					}
 					else
 						solAssert(false, "Function not found in member access");
 					break;
@@ -1662,7 +1667,14 @@ void IRGeneratorForStatements::endVisit(Identifier const& _identifier)
 		return;
 	}
 	else if (FunctionDefinition const* functionDef = dynamic_cast<FunctionDefinition const*>(declaration))
-		define(_identifier) << to_string(functionDef->resolveVirtual(m_context.mostDerivedContract()).id()) << "\n";
+	{
+		FunctionDefinition const& resolvedFunctionDef = functionDef->resolveVirtual(m_context.mostDerivedContract());
+		define(_identifier) << to_string(resolvedFunctionDef.id()) << "\n";
+
+		solAssert(resolvedFunctionDef.functionType(true), "");
+		solAssert(resolvedFunctionDef.functionType(true)->kind() == FunctionType::Kind::Internal, "");
+		m_context.collectDispatchableReference(_identifier, resolvedFunctionDef);
+	}
 	else if (VariableDeclaration const* varDecl = dynamic_cast<VariableDeclaration const*>(declaration))
 		handleVariableReference(*varDecl, _identifier);
 	else if (dynamic_cast<ContractDefinition const*>(declaration))

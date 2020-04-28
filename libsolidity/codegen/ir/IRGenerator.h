@@ -62,9 +62,14 @@ private:
 	);
 	std::string generate(Block const& _block);
 
-	/// Generates code for all the functions from the function generation queue.
+	/// Generates code for all the functions from the function generation queue and also any
+	/// internal dispatch functions necessary to be able to call them via pointers.
 	/// The resulting code is stored in the function collector in IRGenerationContext.
-	void generateQueuedFunctions();
+	/// @return The list of internal dispatch candidates that should be passed to the context.
+	/// This needs to be done only for candidates from the deployment code since they may end up
+	/// in storage variables and be called from the runtime code. Candidates detected in the
+	/// runtime code of the contract can be ignored.
+	InternalDispatchMap generateQueuedFunctionsAndInternalDispatch();
 	/// Generates code for and returns the name of the function.
 	std::string generateFunction(FunctionDefinition const& _function);
 	/// Generates a getter for the given declaration and returns its name

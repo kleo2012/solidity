@@ -136,15 +136,21 @@ string IRGenerator::generate(
 
 	t("deploy", deployCode(_contract));
 	generateImplicitConstructors(_contract);
-	generateQueuedFunctions();
+	InternalDispatchMap internalDispatchCandidates = generateQueuedFunctionsAndInternalDispatch();
 	t("functions", m_context.functionCollector().requestedFunctions());
 	t("subObjects", subObjectSources(m_context.subObjectsCreated()));
 
 	resetContext(_contract);
+
+	// Internal dispatch in the runtime object must be able to dispatch also the internal functions
+	// referenced by name only in the deploy part. That's because pointers to them can be passed
+	// to the runtime part via storage variables.
+	m_context.setInternalDispatchCandidates(move(internalDispatchCandidates));
+
 	// Do not register immutables to avoid assignment.
 	t("RuntimeObject", m_context.runtimeObjectName(_contract));
 	t("dispatch", dispatchRoutine(_contract));
-	generateQueuedFunctions();
+	generateQueuedFunctionsAndInternalDispatch();
 	t("runtimeFunctions", m_context.functionCollector().requestedFunctions());
 	t("runtimeSubObjects", subObjectSources(m_context.subObjectsCreated()));
 	return t.render();
@@ -157,11 +163,40 @@ string IRGenerator::generate(Block const& _block)
 	return generator.code();
 }
 
-void IRGenerator::generateQueuedFunctions()
+InternalDispatchMap IRGenerator::generateQueuedFunctionsAndInternalDispatch()
 {
-	while (!m_context.functionGenerationQueueEmpty())
-		// NOTE: generateFunction() may modify function generation queue
-		generateFunction(*m_context.dequeueFunctionForCodeGeneration());
+	do
+	{
+		while (!m_context.functionGenerationQueueEmpty())
+			// NOTE: generateFunction() may modify function generation queue
+			generateFunction(*m_context.dequeueFunctionForCodeGeneration());
+
+		// This will add new functions to the queue unless no new candidates are accepted
+		m_context.moveCollectedReferencesToDispatch();
+	} while (!m_context.functionGenerationQueueEmpty());
+
+	auto [internalDispatch, internalDispatchCandidates] = m_context.consumeInternalDispatchMap();
+	for (auto const& [arity, functions]: internalDispatch)
+	{
+		// NOTE: We generate the dispatch even if there are no valid functions to call because
+		// code that makes a call via a bad or uninitialized function pointer must still compile
+		// (even if it fails at runtime anyway).
+		m_context.internalDispatch(arity, functions);
+	}
+
+	solAssert(m_context.internalDispatchClean(), "");
+	solAssert(
+		m_context.functionGenerationQueueEmpty(),
+		"Internal dispatch must not add new functions to generation queue because they won't be proeessed"
+	);
+
+	for (auto& [arity, functions]: internalDispatch)
+	{
+		solAssert(internalDispatchCandidates.count(arity) == 0, "");
+		internalDispatchCandidates[arity] = move(functions);
+	}
+
+	return internalDispatchCandidates;
 }
 
 string IRGenerator::generateFunction(FunctionDefinition const& _function)
@@ -560,6 +595,10 @@ void IRGenerator::resetContext(ContractDefinition const& _contract)
 	solAssert(
 		m_context.functionCollector().requestedFunctions().empty(),
 		"Reset context while it still had functions."
+	);
+	solAssert(
+		m_context.internalDispatchClean(),
+		"Reset internal dispatch map without consuming it."
 	);
 	m_context = IRGenerationContext(m_evmVersion, m_context.revertStrings(), m_optimiserSettings);
 
