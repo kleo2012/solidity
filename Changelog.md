@@ -13,6 +13,7 @@ Bugfixes:
  * ABI: Skip ``private`` or ``internal`` constructors.
  * Type Checker: Disallow accessing ``runtimeCode`` for contract types that contain immutable state variables.
  * Fixed an "Assembly Exception in Bytecode" error where requested functions were generated twice.
+ * Yul assembler: Fix source location of variable declarations without value.
 
 
 
