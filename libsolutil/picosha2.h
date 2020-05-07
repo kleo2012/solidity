@@ -1,7 +1,7 @@
 /*
 The MIT License (MIT)
 
-Copyright (C) 2014 okdshin
+Copyright (C) 2017 okdshin
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -23,9 +23,13 @@ THE SOFTWARE.
 */
 #pragma once
 
-//picosha2:20140213
-#include <cstdint>
-#include <iostream>
+// picosha2:20140213
+#ifndef PICOSHA2_BUFFER_SIZE_FOR_INPUT_ITERATOR
+#define PICOSHA2_BUFFER_SIZE_FOR_INPUT_ITERATOR \
+	1048576  //=1024*1024: default is 1MB memory
+#endif
+
+#include <fstream>
 #include <vector>
 #include <iterator>
 #include <cassert>
@@ -34,6 +38,8 @@ THE SOFTWARE.
 
 namespace picosha2
 {
+
+static size_t const k_digest_size = 32;
 
 namespace detail
 {
@@ -117,7 +123,8 @@ inline uint32_t ssig1(uint32_t x)
 template<typename RaIter1, typename RaIter2>
 void hash256_block(RaIter1 message_digest, RaIter2 first, RaIter2 last)
 {
-	(void)last; // FIXME: check this is valid
+	assert(first + 64 == last);
+	static_cast<void>(last);  // for avoiding unused-variable warning
 	uint32_t w[64];
 	std::fill(w, w+64, 0);
 	for (std::size_t i = 0; i < 16; ++i)
@@ -139,8 +146,8 @@ void hash256_block(RaIter1 message_digest, RaIter2 first, RaIter2 last)
 
 	for (std::size_t i = 0; i < 64; ++i)
 	{
-		uint32_t temp1 = h+bsig1(e)+ch(e,f,g)+add_constant[i]+w[i];
-		uint32_t temp2 = bsig0(a)+maj(a,b,c);
+		uint32_t temp1 = h + bsig1(e) + ch(e, f, g) + add_constant[i] + w[i];
+		uint32_t temp2 = bsig0(a) + maj(a, b, c);
 		h = g;
 		g = f;
 		f = e;
@@ -151,18 +158,62 @@ void hash256_block(RaIter1 message_digest, RaIter2 first, RaIter2 last)
 		a = mask_32bit(temp1+temp2);
 	}
 	*message_digest += a;
-	*(message_digest+1) += b;
-	*(message_digest+2) += c;
-	*(message_digest+3) += d;
-	*(message_digest+4) += e;
-	*(message_digest+5) += f;
-	*(message_digest+6) += g;
-	*(message_digest+7) += h;
+	*(message_digest + 1) += b;
+	*(message_digest + 2) += c;
+	*(message_digest + 3) += d;
+	*(message_digest + 4) += e;
+	*(message_digest + 5) += f;
+	*(message_digest + 6) += g;
+	*(message_digest + 7) += h;
 	for (std::size_t i = 0; i < 8; ++i)
-		*(message_digest+i) = mask_32bit(*(message_digest+i));
+		*(message_digest + i) = mask_32bit(*(message_digest + i));
 }
 
-}//namespace detail
+}  // namespace detail
+
+template <typename InIter>
+void output_hex(InIter first, InIter last, std::ostream& os)
+{
+	os.setf(std::ios::hex, std::ios::basefield);
+	while (first != last)
+	{
+		os.width(2);
+		os.fill('0');
+		os << static_cast<unsigned int>(*first);
+		++first;
+	}
+	os.setf(std::ios::dec, std::ios::basefield);
+}
+
+template <typename InIter>
+void bytes_to_hex_string(InIter first, InIter last, std::string& hex_str)
+{
+	std::ostringstream oss;
+	output_hex(first, last, oss);
+	hex_str.assign(oss.str());
+}
+
+template <typename InContainer>
+void bytes_to_hex_string(InContainer const& bytes, std::string& hex_str)
+{
+	bytes_to_hex_string(bytes.begin(), bytes.end(), hex_str);
+}
+
+template <typename InIter>
+std::string bytes_to_hex_string(InIter first, InIter last)
+{
+	std::string hex_str;
+	bytes_to_hex_string(first, last, hex_str);
+	return hex_str;
+}
+
+template <typename InContainer>
+std::string bytes_to_hex_string(InContainer const& bytes)
+{
+	std::string hex_str;
+	bytes_to_hex_string(bytes, hex_str);
+	return hex_str;
+}
 
 class hash256_one_by_one
 {
@@ -176,47 +227,47 @@ public:
 	{
 		buffer_.clear();
 		std::fill(data_length_digits_, data_length_digits_ + 4, 0);
-		std::copy(detail::initial_message_digest, detail::initial_message_digest+8, h_);
+		std::copy(detail::initial_message_digest, detail::initial_message_digest + 8, h_);
 	}
 
-	template<typename RaIter>
+	template <typename RaIter>
 	void process(RaIter first, RaIter last)
 	{
-		add_to_data_length(std::distance(first, last));
+		add_to_data_length(static_cast<uint32_t>(std::distance(first, last)));
 		std::copy(first, last, std::back_inserter(buffer_));
 		std::size_t i = 0;
-		for (;i + 64 <= buffer_.size(); i+=64)
-			detail::hash256_block(h_, buffer_.begin()+i, buffer_.begin()+i+64);
-		buffer_.erase(buffer_.begin(), buffer_.begin()+i);
+		for (; i + 64 <= buffer_.size(); i += 64)
+			detail::hash256_block(h_, buffer_.begin() + i, buffer_.begin() + i + 64);
+		buffer_.erase(buffer_.begin(), buffer_.begin() + i);
 	}
 
 	void finish()
 	{
 		uint8_t temp[64];
-		std::fill(temp, temp+64, 0);
+		std::fill(temp, temp + 64, 0);
 		std::size_t remains = buffer_.size();
 		std::copy(buffer_.begin(), buffer_.end(), temp);
 		temp[remains] = 0x80;
 
 		if (remains > 55)
 		{
-			std::fill(temp+remains+1, temp+64, 0);
-			detail::hash256_block(h_, temp, temp+64);
-			std::fill(temp, temp+64-4, 0);
+			std::fill(temp + remains + 1, temp + 64, 0);
+			detail::hash256_block(h_, temp, temp + 64);
+			std::fill(temp, temp + 64 - 4, 0);
 		}
 		else
-			std::fill(temp+remains+1, temp+64-4, 0);
+			std::fill(temp + remains + 1, temp + 64 - 4, 0);
 
 		write_data_bit_length(&(temp[56]));
-		detail::hash256_block(h_, temp, temp+64);
+		detail::hash256_block(h_, temp, temp + 64);
 	}
 
-	template<typename OutIter>
+	template <typename OutIter>
 	void get_hash_bytes(OutIter first, OutIter last) const
 	{
 		for (uint32_t const* iter = h_; iter != h_ + 8; ++iter)
 			for (std::size_t i = 0; i < 4 && first != last; ++i)
-				*(first++) = detail::mask_8bit(static_cast<uint8_t>(*iter >> (24 - 8 * i)));
+				*(first++) = detail::mask_8bit(static_cast<uint8_t>((*iter >> (24 - 8 * i))));
 	}
 
 private:
@@ -252,7 +303,7 @@ private:
 			data_bit_length_digits[i] <<= 3;
 			data_bit_length_digits[i] |= carry;
 			data_bit_length_digits[i] &= 65535u;
-			carry = (before_val >> (16-3)) & 65535u;
+			carry = (before_val >> (16 - 3)) & 65535u;
 		}
 
 		// write data_bit_length
@@ -263,18 +314,97 @@ private:
 		}
 	}
 	std::vector<uint8_t> buffer_;
-	uint32_t data_length_digits_[4]; //as 64bit integer (16bit x 4 integer)
+	uint32_t data_length_digits_[4];  // as 64bit integer (16bit x 4 integer)
 	uint32_t h_[8];
 };
 
-template<typename RaIter, typename OutIter>
-void hash256(RaIter first, RaIter last, OutIter first2, OutIter last2)
+inline void get_hash_hex_string(hash256_one_by_one const& hasher, std::string& hex_str)
+{
+	uint8_t hash[k_digest_size];
+	hasher.get_hash_bytes(hash, hash + k_digest_size);
+	return bytes_to_hex_string(hash, hash + k_digest_size, hex_str);
+}
+
+inline std::string get_hash_hex_string(hash256_one_by_one const& hasher)
+{
+	std::string hex_str;
+	get_hash_hex_string(hasher, hex_str);
+	return hex_str;
+}
+
+namespace impl {
+template <typename RaIter, typename OutIter>
+void hash256_impl(RaIter first, RaIter last, OutIter first2, OutIter last2, int, std::random_access_iterator_tag)
 {
 	hash256_one_by_one hasher;
-	//hasher.init();
+	// hasher.init();
 	hasher.process(first, last);
 	hasher.finish();
 	hasher.get_hash_bytes(first2, last2);
+}
+
+template <typename InputIter, typename OutIter>
+void hash256_impl(
+	InputIter first,
+	InputIter last,
+	OutIter first2,
+	OutIter last2,
+	int buffer_size,
+	std::input_iterator_tag
+)
+{
+	std::vector<uint8_t> buffer(buffer_size);
+	hash256_one_by_one hasher;
+	// hasher.init();
+	while (first != last)
+	{
+		int size = buffer_size;
+		for (int i = 0; i != buffer_size; ++i, ++first)
+		{
+			if (first == last)
+			{
+				size = i;
+				break;
+			}
+			buffer[i] = *first;
+		}
+		hasher.process(buffer.begin(), buffer.begin() + size);
+	}
+	hasher.finish();
+	hasher.get_hash_bytes(first2, last2);
+}
+}
+
+template <typename InIter, typename OutIter>
+void hash256(
+	InIter first,
+	InIter last,
+	OutIter first2,
+	OutIter last2,
+	int buffer_size = PICOSHA2_BUFFER_SIZE_FOR_INPUT_ITERATOR)
+{
+	picosha2::impl::hash256_impl(
+		first, last, first2, last2, buffer_size,
+		typename std::iterator_traits<InIter>::iterator_category()
+	);
+}
+
+template <typename InIter, typename OutContainer>
+void hash256(InIter first, InIter last, OutContainer& dst)
+{
+	hash256(first, last, dst.begin(), dst.end());
+}
+
+template <typename InContainer, typename OutIter>
+void hash256(InContainer const& src, OutIter first, OutIter last)
+{
+	hash256(src.begin(), src.end(), first, last);
+}
+
+template <typename InContainer, typename OutContainer>
+void hash256(InContainer const& src, OutContainer& dst)
+{
+	hash256(src.begin(), src.end(), dst.begin(), dst.end());
 }
 
 template <typename RaContainer>
@@ -285,4 +415,42 @@ std::vector<uint8_t> hash256(RaContainer const& _src)
 	return ret;
 }
 
-}//namespace picosha2
+template <typename InIter>
+void hash256_hex_string(InIter first, InIter last, std::string& hex_str)
+{
+	uint8_t hashed[k_digest_size];
+	hash256(first, last, hashed, hashed + k_digest_size);
+	std::ostringstream oss;
+	output_hex(hashed, hashed + k_digest_size, oss);
+	hex_str.assign(oss.str());
+}
+
+template <typename InIter>
+std::string hash256_hex_string(InIter first, InIter last)
+{
+	std::string hex_str;
+	hash256_hex_string(first, last, hex_str);
+	return hex_str;
+}
+
+inline void hash256_hex_string(std::string const& src, std::string& hex_str)
+{
+	hash256_hex_string(src.begin(), src.end(), hex_str);
+}
+
+template <typename InContainer>
+void hash256_hex_string(InContainer const& src, std::string& hex_str)
+{
+	hash256_hex_string(src.begin(), src.end(), hex_str);
+}
+
+template <typename InContainer>
+std::string hash256_hex_string(InContainer const& src)
+{
+	return hash256_hex_string(src.begin(), src.end());
+}
+template<typename OutIter>void hash256(std::ifstream& f, OutIter first, OutIter last){
+	hash256(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>(), first,last);
+
+}
+}// namespace picosha2
