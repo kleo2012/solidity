@@ -1,5 +1,9 @@
 ### 0.6.8 (unreleased)
 
+Important Bugfixes:
+ * Code Generator: Fixed that string literals could sometimes cause incorrect IR code to be generated due to missing escaping when the ABIEncoderV2 was active.
+
+
 Language Features:
 
 
