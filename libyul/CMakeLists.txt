@@ -130,6 +130,8 @@ add_library(yul
 	optimiser/OptimiserStep.h
 	optimiser/OptimizerUtilities.cpp
 	optimiser/OptimizerUtilities.h
+	optimiser/ReasoningBasedSimplifier.cpp
+	optimiser/ReasoningBasedSimplifier.h
 	optimiser/RedundantAssignEliminator.cpp
 	optimiser/RedundantAssignEliminator.h
 	optimiser/Rematerialiser.cpp
@@ -163,4 +165,9 @@ add_library(yul
 	optimiser/VarNameCleaner.cpp
 	optimiser/VarNameCleaner.h
 )
+
+find_package(Z3 4.6.0)
+
 target_link_libraries(yul PUBLIC evmasm solutil langutil)
+# for the SMT stuff...
+target_link_libraries(yul PUBLIC solidity)
