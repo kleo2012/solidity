@@ -1596,6 +1596,32 @@ void TypeChecker::endVisit(BinaryOperation const& _operation)
 					"might overflow. Silence this warning by converting the literal to the "
 					"expected type."
 				);
+
+		if (
+			rightType->category() == Type::Category::RationalNumber &&
+			commonType->category() == Type::Category::Integer
+		)
+		{
+			IntegerType const* integerType =
+				dynamic_cast<RationalNumberType const*>(rightType)->integerType();
+
+			if (
+				!integerType || (
+					integerType->numBits() >
+					dynamic_cast<IntegerType const&>(*commonType).numBits()
+				)
+			)
+			{
+				m_errorReporter.typeError(
+					7903_error,
+					_operation.rightExpression().location(),
+					"Literal is too large. The result of the operation has type: (" +
+					commonType->toString() + ")."
+				);
+			}
+
+		}
+
 		if (
 			commonType->category() == Type::Category::Integer &&
 			rightType->category() == Type::Category::Integer &&
